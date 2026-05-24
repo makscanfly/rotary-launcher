@@ -36,7 +36,7 @@ bool g_slowing_down = false;
 bool g_accelerating = false;
 
 // --- Snapshot control ---
-volatile bool g_capture_enabled = true;  // zbieramy dopóki nie zrobimy snapshotu / nie wyłączymy
+volatile bool g_capture_enabled = true;  // zbieranie dopóki nie zrobimy snapshotu / nie wyłączymy
 
 // --- Status BLE ---
 static volatile bool g_connected = false;
@@ -73,14 +73,14 @@ volatile bool     g_samples_ready = false;
 
 static const char* DEV_NAME = "LauncherESP";
 
-// Service UUID (stały)
+// Service UUID
 static NimBLEUUID SERVICE_UUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
 
 // Charakterystyki
 static NimBLEUUID CHAR_RX_UUID("beb5483e-36e1-4688-b7f5-ea07361b26a8"); // Write
-static NimBLEUUID CHAR_TX_UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"); // Read (NOWY)
+static NimBLEUUID CHAR_TX_UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"); // Read
 
-// --- Callbacki serwera ---
+// --- Callbacki ---
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer*, NimBLEConnInfo&) override {
     g_connected = true;
@@ -98,7 +98,7 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
 
     std::string value = ch->getValue();
     if (value.size() != 3) {
-      return; // oczekujemy: uint8 + uint16
+      return; // oczekiwane: uint8 + uint16
     }
 
     uint8_t  cmd;
@@ -115,7 +115,7 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-// --- TX: Read callback (snapshot 500x uint32) ---
+// --- TX: Read callback ---
 class TxCallbacks : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* ch, NimBLEConnInfo&) override {
 
@@ -168,7 +168,7 @@ static constexpr gpio_num_t PIN_DIR    = GPIO_NUM_7;
 static constexpr gpio_num_t PIN_MOSFET = GPIO_NUM_15;
 static constexpr gpio_num_t PIN_LED    = GPIO_NUM_16;
 
-// PWM (LEDC)
+// PWM
 static constexpr gpio_num_t PIN_PWM  = GPIO_NUM_18;
 static constexpr int PWM_CH          = 0;
 static constexpr int PWM_FREQ_HZ     = 18000;
@@ -227,28 +227,26 @@ void DCmotor_set_PWM(uint16_t value) {
 }
 
 inline bool pwm_in_range(uint16_t pwm) {
-  // LEDC: rozdzielczość 10 bit -> 0..1023
   return (pwm <= 1023);
 }
 
 
-// Blue LED
+// blue LED
 inline void LED_on()  { digitalWrite((int)PIN_LED, HIGH); }
 inline void LED_off() { digitalWrite((int)PIN_LED, LOW);  }
 
 static void resetSamples() {
   portENTER_CRITICAL(&g_samplesMux);
 
-  // wyzeruj całą tablicę
+  // zerowanie bufora
   for (uint16_t i = 0; i < SAMPLES_COUNT; i++) {
     g_samples[i] = 0;
   }
 
-  // metadane snapshotu
+  // flagi snapshotu
   g_samples_index = 0;
   g_samples_ready = false;
 
-  // po resecie znów możemy zbierać
   g_capture_enabled = true;
 
   portEXIT_CRITICAL(&g_samplesMux);
@@ -263,7 +261,7 @@ inline void setDirLow() {
   digitalWrite((int)PIN_DIR, LOW);
 }
 
-// Hamowanie ramienia: wywołuj raz na obrót (np. gdy g_new_revolution == true)
+// stopniowe hamowanie
 static inline void deaccelerate(float factor = 0.75f, uint16_t stopThreshold = 100) {
     if (!(factor > 0.0f && factor < 1.0f)) {
         factor = 0.75f;
@@ -292,29 +290,22 @@ static inline void deaccelerate(float factor = 0.75f, uint16_t stopThreshold = 1
     DCmotor_set_PWM(g_motor_pwm);
 }
 
-// Rozpędzanie
-// Rozpędzanie: JEDEN KROK na wywołanie (np. raz na obrót)
+// stopniowe rozpędzanie
 static inline void accelerate_to(uint16_t target) {
   const uint16_t pwm_max = static_cast<uint16_t>((1u << PWM_RES_BITS) - 1u);
   if (target > pwm_max) target = pwm_max;
   if (target > 850)     target = 850;
 
-  // Jeżeli już jesteśmy na/ponad target — nie rozpędzamy "w dół"
   if (g_motor_pwm >= target) {
-    // jeśli chcesz twardo ustawić do targetu (zamiast zostawić wyżej), odkomentuj:
-    // g_motor_pwm = target;
-    // DCmotor_set_PWM(g_motor_pwm);
     return;
   }
 
-  // Target <= 500: ustaw bezpośrednio
   if (target <= 500) {
     g_motor_pwm = target;
     DCmotor_set_PWM(g_motor_pwm);
     return;
   }
 
-  // 501..800: logika 500 +100 +100 ... +reszta (ale 1 krok na wywołanie)
   if (target <= 800) {
     if (g_motor_pwm < 500) {
       g_motor_pwm = 500;
@@ -322,20 +313,17 @@ static inline void accelerate_to(uint16_t target) {
       return;
     }
 
-    // następny "setkowy" próg
     uint16_t next = static_cast<uint16_t>(g_motor_pwm + 100);
 
     if (next <= target) {
-      g_motor_pwm = next;                // krok 100
+      g_motor_pwm = next;
     } else {
-      g_motor_pwm = target;              // końcowa "reszta"
+      g_motor_pwm = target;
     }
     DCmotor_set_PWM(g_motor_pwm);
     return;
   }
 
-  // 801..850: logika 800 +10 +10 ... +reszta (1 krok na wywołanie)
-  // (target jest tu w [801..850])
   if (g_motor_pwm < 800) {
     g_motor_pwm = 800;
     DCmotor_set_PWM(g_motor_pwm);
@@ -345,9 +333,9 @@ static inline void accelerate_to(uint16_t target) {
   uint16_t next = static_cast<uint16_t>(g_motor_pwm + 10);
 
   if (next <= target) {
-    g_motor_pwm = next;                  // krok 10
+    g_motor_pwm = next;
   } else {
-    g_motor_pwm = target;                // końcowa "reszta"
+    g_motor_pwm = target;
   }
   DCmotor_set_PWM(g_motor_pwm);
 }
@@ -374,7 +362,6 @@ void setup() {
   bleSetup();
   Serial.println("-- BLE set --");
 
-  // ważne: inicjalizacja znacznika czasu, żeby pierwszy okres nie był "od zera"
   portENTER_CRITICAL(&g_timerMux);
   g_last_detection_time_us = (uint32_t)micros();
   g_new_revolution = false;
@@ -387,9 +374,7 @@ void setup() {
 
 
 void loop() {
-  // ============================================================
-  // (A) Odbiór i obsługa nowej komendy BLE
-  // ============================================================
+  // Odbiór i obsługa kodu polecenia
   bool haveCmd = false;
   uint8_t  cmdRaw = 0;
   uint16_t pwmLocal = 0;
@@ -417,11 +402,10 @@ void loop() {
         break;
 
       case Command::ResetSampleCollecting:
-        resetSamples(); // wyzeruje tablicę + metadane + włączy capture
+        resetSamples();
         break;
 
       case Command::FinishSampleCollecting:
-        // Finalize snapshot: blokujemy dalsze próbki i oznaczamy gotowość odczytu
         portENTER_CRITICAL(&g_samplesMux);
         g_capture_enabled = false;
         g_samples_ready = true;
@@ -433,9 +417,7 @@ void loop() {
           DCmotor_set_PWM(pwmLocal);
           g_motor_pwm = pwmLocal;
         }
-        // else: wartość poza zakresem -> ignorujemy polecenie
         break;
-
 
       case Command::StopMotor:
         DCmotor_set_PWM(0);
@@ -471,7 +453,6 @@ void loop() {
         break;
 
       default:
-        // Nieznana komenda -> ignorujemy
         break;
 
     }
@@ -486,7 +467,6 @@ void loop() {
 
       portENTER_CRITICAL(&g_timerMux);
       newRev = g_new_revolution;
-      // flaga g_new_revolution i tak jest usywana w następnej części loop() podczas logowania pomiaru.
       portEXIT_CRITICAL(&g_timerMux);
 
       if (newRev) {
@@ -500,38 +480,28 @@ void loop() {
 
   if (g_accelerating) {
 
-    // Jeśli stoi (brak obrotów = brak newRev), musimy wykonać pierwszy krok od razu
     if (g_motor_pwm == 0 && pwm_target > 0) {
-      // Pierwszy krok:
-      // - jeśli target <= 500 -> ustaw target
-      // - jeśli target > 500  -> ustaw 500 (start rampy)
       uint16_t first = (pwm_target <= 500) ? pwm_target : 500;
       g_motor_pwm = first;
       DCmotor_set_PWM(g_motor_pwm);
-
-      // Nie kończymy tu od razu całego przyspieszania, bo rampowanie ma iść dalej na obrotach
     }
 
     bool newRev = false;
     portENTER_CRITICAL(&g_timerMux);
-    newRev = g_new_revolution;  // nie kasujemy tutaj flagi
+    newRev = g_new_revolution;
     portEXIT_CRITICAL(&g_timerMux);
 
-    // Dalsze kroki rampy wykonuj raz na obrót
     if (newRev) {
       accelerate_to(pwm_target);
     }
 
     if (g_motor_pwm >= pwm_target) {
-      // w naszej funkcji nie schodzimy w dół, więc >= oznacza "osiągnięte"
       g_accelerating = false;
     }
   }
 
 
-  // ============================================================
-  // (B) Odbiór nowego pomiaru z ISR i dopisanie do tablicy próbek
-  // ============================================================
+  // Odbiór nowego pomiaru i dopisanie do tablicy próbek
   bool havePeriod = false;
   uint32_t periodLocal = 0;
 
@@ -551,13 +521,11 @@ void loop() {
         g_samples[g_samples_index] = periodLocal;
         g_samples_index++;
 
-        // Jeżeli uzbieraliśmy pełny snapshot 500 próbek -> automatycznie finalizuj
         if (g_samples_index >= SAMPLES_COUNT) {
           g_samples_ready = true;
           g_capture_enabled = false;
         }
       } else {
-        // redundancja bezpieczeństwa
         g_samples_ready = true;
         g_capture_enabled = false;
       }
@@ -565,9 +533,6 @@ void loop() {
 
     portEXIT_CRITICAL(&g_samplesMux);
   }
-
-  // Brak delay — świadomie. Jeśli okaże się, że CPU jest zbyt obciążone,
-  // dodamy minimalne odciążenie (np. delay(1)).
 }
 
 

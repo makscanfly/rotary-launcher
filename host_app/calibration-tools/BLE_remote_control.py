@@ -24,7 +24,7 @@ class LauncherRemoteControl:
     Klient BLE dla LauncherESP.
     - connect(): skan + połączenie (po UUID serwisu), walidacja charakterystyk
     - send_cmd(cmd, pwm): wysyła 3 bajty: uint8 + uint16 LE
-    - read_samples(): czyta 2000 bajtów i zwraca List[int] długości 500 (uint32 LE)
+    - read_samples(): czytanie 2000 bajtów i zwracanie List[int] długości 500 (uint32 LE)
     """
 
     SAMPLES_COUNT = 100
@@ -55,10 +55,7 @@ class LauncherRemoteControl:
         await self.disconnect()
 
     async def connect(self) -> None:
-        """
-        Skanuje i łączy się z urządzeniem, preferując dopasowanie po UUID serwisu.
-        Dodatkowo waliduje, że RX i TX charakterystyki istnieją w usługach GATT.
-        """
+        # skanowanie i łączenie po UUID
         if self.is_connected:
             return
 
@@ -73,11 +70,8 @@ class LauncherRemoteControl:
         try:
             await self._client.connect()
 
-            # Bleak: w zależności od wersji backendu get_services() może nie istnieć.
-            # Stabilniejszy wariant: użyj property `.services` po połączeniu.
             services = self._client.services
             if services is None:
-                # W niektórych konfiguracjach services są ładowane leniwie – wymuś odczyt.
                 await self._client.read_gatt_char(self.cfg.tx_uuid)
                 services = self._client.services
 
@@ -117,12 +111,6 @@ class LauncherRemoteControl:
                 self._device = None
 
     async def send_cmd(self, cmd: int, pwm: int) -> None:
-        """
-        Wysyła komendę do ESP:
-        - cmd: 0..255 (uint8)
-        - pwm: 0..65535 (uint16)
-        Payload: 3 bajty little-endian: <BH
-        """
         self._require_connected()
 
         if not (0 <= cmd <= 0xFF):
@@ -137,11 +125,6 @@ class LauncherRemoteControl:
         await self._client.write_gatt_char(self.cfg.rx_uuid, payload, response=False)
 
     async def read_samples(self) -> List[int]:
-        """
-        Czyta snapshot próbek z TX (Read):
-        - oczekuje 2000 bajtów (500 * uint32)
-        - zwraca listę 500 elementów typu int (uint32)
-        """
         self._require_connected()
 
         raw = await self._client.read_gatt_char(self.cfg.tx_uuid)
@@ -157,11 +140,6 @@ class LauncherRemoteControl:
         return list(struct.unpack(fmt, raw))
 
     async def _discover_device(self) -> Optional[BLEDevice]:
-        """
-        Odszukuje urządzenie:
-        1) preferuje reklamowanie service_uuid,
-        2) w razie problemów może też brać po nazwie dev_name jako fallback.
-        """
         target_service = self.cfg.service_uuid.lower()
 
         def _matcher(dev: BLEDevice, adv_data) -> bool:
@@ -176,7 +154,7 @@ class LauncherRemoteControl:
 
     def _require_connected(self) -> None:
         if not self.is_connected:
-            raise LauncherRemoteControlError("Brak połączenia. Wywołaj najpierw connect().")
+            raise LauncherRemoteControlError("Brak połączenia.")
 
     # Wysyłanie rozpoznawalnych kodów przez wyrzutnię
     async def LedOn(self) -> None:
@@ -221,12 +199,12 @@ class LauncherRemoteControl:
         if 0 <= pwm <= 1023:
             await self.send_cmd(cmd=12, pwm=pwm)
 
-# --- Minimalny przykład użycia ---
+# --- przykład użycia ---
 async def _demo():
     launcher = LauncherRemoteControl()
     await launcher.connect()
     try:
-        await launcher.send_cmd(cmd=5, pwm=1200)  # przykład
+        await launcher.send_cmd(cmd=5, pwm=1200)
         samples = await launcher.read_samples()
         print("samples[0:10] =", samples[:10])
     finally:

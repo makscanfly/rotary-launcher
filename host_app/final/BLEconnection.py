@@ -1,13 +1,3 @@
-# BLEconnection.py
-#
-# Minimalna warstwa BLE dla wyrzutni "LauncherESP".
-# Wymaga: pip install bleak
-#
-# Zgodne z Bleak 2.x:
-# - Usługi są enumerowane automatycznie przy connect(), dostęp przez client.services
-# - get_services() nie istnieje w Bleak 2.x
-# - callback start_notify dostaje jako pierwszy argument obiekt charakterystyki (nie int)
-
 from __future__ import annotations
 
 import asyncio
@@ -21,14 +11,10 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
 
-# ---------------- Protokół: event codes ----------------
-
 EVT_EMERGENCY_STOP = 1
 EVT_PARAMS_READ = 2
 EVT_SHOT_DONE = 3
 
-
-# ---------------- UUID (zgodne z ESP) ----------------
 
 DEV_NAME = "LauncherESP"
 
@@ -37,16 +23,14 @@ CHAR_RX_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 CHAR_EVENT_UUID = "44444444-4444-4444-4444-444444444444"
 
 
-# ---------------- Modele i wyjątki ----------------
-
 @dataclass(frozen=True)
 class LauncherEvent:
     code: int
-    ts: float  # time.time()
+    ts: float
 
 
 class BleError(Exception):
-    """Bazowy wyjątek warstwy BLE."""
+    pass
 
 
 class DeviceNotFoundError(BleError):
@@ -77,20 +61,8 @@ class ShotDoneTimeoutError(BleError):
     pass
 
 
-# ---------------- Implementacja ----------------
 
 class LauncherESPBLE:
-    """
-    Minimalna klasa BLE dopasowana do API używanego w CLI.
-
-    Publiczne metody:
-      - connect()
-      - disconnect()
-      - send_params_and_wait_ack(period_us, fi_deg, ack_timeout_s)
-      - wait_for_shot_done(timeout_s=None)
-
-    on_event: opcjonalny callback (sync) wywoływany na każde zdarzenie.
-    """
 
     def __init__(self, *, on_event: Optional[Callable[[LauncherEvent], None]] = None) -> None:
         self._on_event = on_event
@@ -102,7 +74,6 @@ class LauncherESPBLE:
         self._event_q: asyncio.Queue[LauncherEvent] = asyncio.Queue()
         self._disconnected = asyncio.Event()
 
-        # Chroni sekwencje: write -> wait (żeby nie nakładać równoległych operacji)
         self._op_lock = asyncio.Lock()
 
     async def connect(self) -> None:
@@ -123,11 +94,8 @@ class LauncherESPBLE:
             raise ConnectionFailedError(f"Nie udało się połączyć: {e}") from e
 
         try:
-            # Bleak 2.x: usługi są enumerowane automatycznie przy connect()
-            services = client.services  # BleakGATTServiceCollection
+            services = client.services
 
-            # Jeśli backend jeszcze nie zdążył, client.services może rzucić (wg docs) lub być None.
-            # Obsługujemy oba przypadki defensywnie.
             if services is None:
                 raise GattMismatchError("Nie udało się pobrać usług (client.services is None).")
 
@@ -143,11 +111,9 @@ class LauncherESPBLE:
             if ev is None:
                 raise GattMismatchError(f"Brak charakterystyki EVENT (notify) {self._event_char_uuid}.")
 
-            # Subskrypcja notyfikacji (przed jakimkolwiek write)
             await client.start_notify(self._event_char_uuid, self._handle_notify)
 
         except Exception:
-            # Jeśli GATT/notify padnie, spróbuj posprzątać połączenie
             try:
                 await client.disconnect()
             except Exception:
@@ -160,7 +126,6 @@ class LauncherESPBLE:
         client = self._client
         self._client = None
 
-        # Wybudź ewentualnych waiterów
         self._disconnected.set()
 
         if client is None:
@@ -177,10 +142,6 @@ class LauncherESPBLE:
             pass
 
     async def send_params_and_wait_ack(self, period_us: int, fi_deg: float, *, ack_timeout_s: float) -> None:
-        """
-        Wysyła parametry do ESP i czeka na EVT_PARAMS_READ.
-        Przerywa natychmiast na EVT_EMERGENCY_STOP lub rozłączenie.
-        """
         if period_us < 0 or period_us > 0xFFFFFFFF:
             raise ValueError("period_us poza zakresem uint32.")
 
@@ -190,8 +151,7 @@ class LauncherESPBLE:
             payload = struct.pack("<If", int(period_us), float(fi_deg))
 
             try:
-                # Bleak 2.x: jawnie ustawiamy response dla deterministycznego zachowania
-                await self._client.write_gatt_char(self._rx_char_uuid, payload, response=True)  # type: ignore[union-attr]
+                await self._client.write_gatt_char(self._rx_char_uuid, payload, response=True)
             except Exception as e:
                 raise BleError(f"Błąd zapisu do RX: {e}") from e
 
@@ -201,10 +161,6 @@ class LauncherESPBLE:
                 raise ParamsAckTimeoutError("Timeout oczekiwania na EVT_PARAMS_READ (ACK).") from e
 
     async def wait_for_shot_done(self, *, timeout_s: Optional[float] = None) -> None:
-        """
-        Czeka na EVT_SHOT_DONE. timeout_s=None => bez limitu.
-        Przerywa natychmiast na EVT_EMERGENCY_STOP lub rozłączenie.
-        """
         await self._ensure_connected()
 
         try:
@@ -212,7 +168,7 @@ class LauncherESPBLE:
         except asyncio.TimeoutError as e:
             raise ShotDoneTimeoutError("Timeout oczekiwania na EVT_SHOT_DONE.") from e
 
-    # ------------- Internals -------------
+
 
     async def _ensure_connected(self) -> None:
         if self._client is None or not self._client.is_connected:
@@ -222,9 +178,7 @@ class LauncherESPBLE:
             raise DisconnectedError("Utracono połączenie BLE.")
 
     async def _find_device(self) -> Optional[BLEDevice]:
-        """
-        Preferujemy filtr po UUID serwisu; dodatkowo dopuszczamy nazwę.
-        """
+        # szukanie po UUID
         service_uuid_l = SERVICE_UUID.lower()
 
         def _filter(d: BLEDevice, adv: AdvertisementData) -> bool:
@@ -240,30 +194,25 @@ class LauncherESPBLE:
             raise BleError(f"Błąd skanowania BLE: {e}") from e
 
     def _on_disconnect(self, _client: BleakClient) -> None:
-        # Callback jest wywoływany przez bleak; synchronizujemy do pętli asyncio
         try:
             loop = asyncio.get_running_loop()
             loop.call_soon_threadsafe(self._disconnected.set)
         except RuntimeError:
-            # Brak działającej pętli (np. podczas shutdown)
             pass
 
     def _handle_notify(self, _sender: Any, data: bytearray) -> None:
-        # Notify: 1 bajt eventCode
         if not data:
             return
 
         code = int(data[0])
         evt = LauncherEvent(code=code, ts=time.time())
 
-        # callback użytkownika (opcjonalny)
         if self._on_event is not None:
             try:
                 self._on_event(evt)
             except Exception:
                 pass
 
-        # wrzuć do kolejki (thread-safe)
         try:
             loop = asyncio.get_running_loop()
             loop.call_soon_threadsafe(self._event_q.put_nowait, evt)
@@ -271,11 +220,6 @@ class LauncherESPBLE:
             pass
 
     async def _wait_for_event(self, wanted_codes: Set[int], *, timeout_s: Optional[float]) -> LauncherEvent:
-        """
-        Pobiera eventy z kolejki aż trafi w wanted_codes.
-        Jeśli wpadnie emergency -> EmergencyStopError.
-        Jeśli rozłączenie -> DisconnectedError.
-        """
 
         async def _run() -> LauncherEvent:
             while True:
@@ -289,7 +233,7 @@ class LauncherESPBLE:
 
                 if evt.code in wanted_codes:
                     return evt
-                # inne eventy ignorujemy (minimalizm)
+                
 
         if timeout_s is None:
             return await _run()

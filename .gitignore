@@ -12,3 +12,6 @@ build/
 *.bin
 *.elf
 *.map
+
+# data files
+collected_data/*.csv

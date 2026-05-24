@@ -5,7 +5,6 @@ Założenia:
 - BLE: komunikacja z ESP o nazwie "LauncherESP"
 - Planner: TrajectoryPlanning (wyznaczanie fi i okresu)
 - Wejście użytkownika przez await asyncio.to_thread(input, ...)
-- Parametr f_max_hz jest stały (wynika z mechaniki)
 """
 
 from __future__ import annotations
@@ -14,8 +13,7 @@ import asyncio
 import math
 from typing import Optional
 
-# Importy zgodne z ostatnimi zmianami
-from BLEconnection import (  # <- zmień nazwę modułu na właściwą, jeśli masz inną
+from BLEconnection import (
     LauncherESPBLE,
     EVT_EMERGENCY_STOP,
     EVT_PARAMS_READ,
@@ -31,39 +29,37 @@ from BLEconnection import (  # <- zmień nazwę modułu na właściwą, jeśli m
     ShotDoneTimeoutError,
 )
 
-from TrajectoryPlanning import TrajectoryPlanning  # <- zmień nazwę modułu na właściwą, jeśli masz inną
+from TrajectoryPlanning import TrajectoryPlanning
 
 
-# ---------------- Konfiguracja aplikacji ----------------
+# konfiguracja i logika pomocnicza
 
 APP_NAME = "Wyrzutnia obrotowa"
 
-# Parametry mechaniki / geometrii (ustaw docelowe wartości)
+# Parametry mechaniki / geometrii
 H_M = 0.364
 D_M = 0.2
 R_M = 0.311
 G = 9.8105 
 
-# Limit mechaniczny (stały, bez edycji przez użytkownika)
+# Limit silnika
 F_MAX_HZ = 4.2
 
 # Timeouty
 ACK_TIMEOUT_S = 5.0
 
-# fi bounds (zgodne z plannerem)
+# fi ograniczenia
 FI_MIN_DEG = 1.0
 FI_MAX_DEG = 89.0
 
 
-# ---------------- Helpers: I/O ----------------
+# logika pomocnicza
 
 async def ainput(prompt: str) -> str:
-    """Asynchroniczny input (nie blokuje event loop)."""
     return await asyncio.to_thread(input, prompt)
 
 
 def parse_float(s: str) -> float:
-    """Akceptuje kropkę i przecinek."""
     s = s.strip().replace(",", ".")
     return float(s)
 
@@ -85,17 +81,12 @@ def format_us(x: int) -> str:
 
 
 def within_allowed_area(xf: float, yf: float) -> bool:
-    """
-    TODO: Zastąp docelową walidacją obszaru dopuszczalnego.
-    Na ten moment przepuszcza wszystko.
-    """
+    # not implemented
     return True
 
 
 def period_us_from_period_s(period_s: float) -> int:
-    """
-    Konwersja do uint32 (ESP oczekuje uint32 microseconds).
-    """
+
     if not math.isfinite(period_s) or period_s <= 0:
         raise ValueError("Nieprawidłowy okres (period_s).")
     us = int(round(period_s * 1_000_000.0))
@@ -104,7 +95,7 @@ def period_us_from_period_s(period_s: float) -> int:
     return us
 
 
-# ---------------- App flow ----------------
+# aplikacja
 
 async def connect_with_retry(ble: LauncherESPBLE) -> None:
     while True:
@@ -210,19 +201,8 @@ async def main() -> None:
     # Planner
     planner = TrajectoryPlanning(h=H_M, d=D_M, R=R_M, g=G)
 
-    # BLE (logowanie tylko przez aplikację; klasa jest cicha)
+    # klasa cicha
     def on_event(evt: LauncherEvent) -> None:
-        # Opcjonalne: w CLI zwykle nie musisz wypisywać wszystkich eventów,
-        # bo i tak czekasz na nie metodami await.
-        # Jeżeli chcesz, możesz odkomentować poniższe:
-        #
-        # if evt.code == EVT_PARAMS_READ:
-        #     print("ESP: EVT_PARAMS_READ")
-        # elif evt.code == EVT_SHOT_DONE:
-        #     print("ESP: EVT_SHOT_DONE")
-        # elif evt.code == EVT_EMERGENCY_STOP:
-        #     print("ESP: EVT_EMERGENCY_STOP")
-        #
         pass
 
     ble = LauncherESPBLE(on_event=on_event)
@@ -258,7 +238,7 @@ async def main() -> None:
                     theta_input_deg = await choose_theta_deg(theta_min, theta_max)
                     sol = planner.solve_by_impact_angle(theta_deg=theta_input_deg, fi_min_deg=FI_MIN_DEG, fi_max_deg=FI_MAX_DEG)
 
-                # Konwersje do tego, co wysyła BLE
+                # Konwersje do tego co wysyła BLE
                 period_us = period_us_from_period_s(sol.period_s)
                 fi_deg = float(sol.fi_deg)
                 freq_hz = float(sol.frequency_hz)
@@ -304,12 +284,10 @@ async def main() -> None:
                 print("Nie odebrano informacji o zakończeniu wystrzału w zadanym czasie.")
                 return
             except ValueError as e:
-                # np. period_us poza zakresem, dane wejściowe
                 print(f"Błąd danych: {e}")
                 print("Wprowadź dane ponownie.\n")
                 continue
             except RuntimeError as e:
-                # np. solver nie znalazł rozwiązania / brak bracketu
                 print(f"Nie udało się wyznaczyć trajektorii: {e}")
                 print("Wprowadź dane ponownie.\n")
                 continue

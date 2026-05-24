@@ -24,19 +24,6 @@ class PlanResult:
 
 
 class TrajectoryPlanning:
-    """
-    Conventions:
-    - fi in radians internally
-    - omega in rad/s
-
-    Impact angle convention (for internal computations):
-    - delta is the signed tangent angle (CCW from +Ox), so dy/dx = tan(delta).
-      For a descending impact, delta is typically negative.
-
-    User-facing impact angle:
-    - theta is the acute impact angle in [0, 90] degrees (how steeply downward), i.e. theta = |delta|.
-      In the solver we assume descending impact and use delta = -theta.
-    """
 
     def __init__(self, *, h: float, d: float, R: float, g: float = 9.8):
         self.h = float(h)
@@ -51,7 +38,6 @@ class TrajectoryPlanning:
         self.xf = float(xf)
         self.yf = float(yf)
 
-    # ---------- Derived control values ----------
 
     @staticmethod
     def _frequency_hz(omega: float) -> float:
@@ -63,10 +49,9 @@ class TrajectoryPlanning:
 
     @staticmethod
     def _fi_time_s(fi_rad: float, omega: float) -> float:
-        # constant angular speed
         return fi_rad / omega
 
-    # ---------- Method 1: minimize omega ----------
+    # minimalizacja omega
 
     def solve_by_optimization(
         self,
@@ -104,9 +89,9 @@ class TrajectoryPlanning:
 
         y_check = self.y_at_x(self.xf, fi_out, omega_out)
 
-        # --- NEW: compute impact angle (theta) at the target for this solution ---
-        delta_at_target = self._delta_from_fi_omega(fi_out, omega_out, x=self.xf)  # signed
-        theta_at_target = abs(delta_at_target)  # acute
+        # obliczenie theta dla znalezionego rozwiązania
+        delta_at_target = self._delta_from_fi_omega(fi_out, omega_out, x=self.xf)
+        theta_at_target = abs(delta_at_target)
 
         diag = {
             "scipy_success": 1.0 if res.success else 0.0,
@@ -115,7 +100,7 @@ class TrajectoryPlanning:
             "y_error": float(y_check - self.yf) if math.isfinite(y_check) else float("nan"),
             "objective_omega2": float(res.fun),
 
-            # --- NEW diagnostics fields ---
+            # daignostyka
             "delta_at_target_deg_internal": float(math.degrees(delta_at_target)) if math.isfinite(delta_at_target) else float("nan"),
             "theta_at_target_deg": float(math.degrees(theta_at_target)) if math.isfinite(theta_at_target) else float("nan"),
         }
@@ -132,7 +117,7 @@ class TrajectoryPlanning:
             diagnostics=diag,
         )
 
-    # ---------- Method 2: enforce impact angle theta (acute) ----------
+    # zadawanie kąta trafienia theta
 
     def solve_by_impact_angle(
         self,
@@ -149,13 +134,13 @@ class TrajectoryPlanning:
         self._require_target()
         theta = self._parse_angle(theta_deg=theta_deg, theta_rad=theta_rad, name="theta")
 
-        # internal signed angle (descending impact assumed): delta = -theta
+        # zamiana dla łatwiejszych obliczeń
         delta = -theta
 
         bracket = self._find_bracket_for_F(delta, fi_min_deg, fi_max_deg, n=scan_n)
         if bracket is None:
             raise RuntimeError(
-                "No sign-change bracket found for Eq.(9) in the given fi range "
+                "No sign-change bracket found for the equation in the given fi range "
                 "(or omega is infeasible throughout). Adjust fi bounds or verify feasibility."
             )
 
@@ -168,7 +153,7 @@ class TrajectoryPlanning:
             maxiter=int(maxiter),
         )
         if not sol.converged:
-            raise RuntimeError("Root solve for Eq.(9) did not converge.")
+            raise RuntimeError("Root solve for the equation did not converge.")
 
         fi_out = float(sol.root)
         omega_out = self._omega_from_angle_constraint(fi_out, delta)
@@ -182,9 +167,9 @@ class TrajectoryPlanning:
         ok2 = omega_out * omega_out
         y_check = self.y_at_x(self.xf, fi_out, omega_out)
 
-        # --- NEW: compute actual impact angle (theta) at the target for this solution ---
-        delta_at_target = self._delta_from_fi_omega(fi_out, omega_out, x=self.xf)  # signed
-        theta_at_target = abs(delta_at_target)  # acute
+        # obliczenie theta dla znalezionego rozwiązania
+        delta_at_target = self._delta_from_fi_omega(fi_out, omega_out, x=self.xf)
+        theta_at_target = abs(delta_at_target)
 
         diag = {
             "bracket_a_rad": float(bracket[0]),
@@ -195,7 +180,7 @@ class TrajectoryPlanning:
             "theta_deg": float(math.degrees(theta)),
             "delta_deg_internal": float(math.degrees(delta)),
 
-            # --- NEW diagnostics fields (unified access) ---
+            # diagnostyka
             "delta_at_target_deg_internal": float(math.degrees(delta_at_target)) if math.isfinite(delta_at_target) else float("nan"),
             "theta_at_target_deg": float(math.degrees(theta_at_target)) if math.isfinite(theta_at_target) else float("nan"),
         }
@@ -212,7 +197,7 @@ class TrajectoryPlanning:
             diagnostics=diag,
         )
 
-    # ---------- Delta/Theta range for target ----------
+    # zakres dopuszczalnego theta dla danego (xf,yf)
 
     def theta_range_for_target(
         self,
@@ -224,29 +209,18 @@ class TrajectoryPlanning:
         fi_max_deg: float = 89.0,
         scan_n: int = 12000,
     ) -> Dict[str, float]:
-        """
-        Returns [theta_min, theta_max] (acute angles) for a given (xf,yf).
 
-        Algorithm (as requested):
-        1) For minimal omega solution, compute internal delta via Eq.(10). This gives theta_min = |delta|.
-        2) For omega_max = 2*pi*f_max, solve fi from y(xf)=yf (Eq.(3)), then compute delta via Eq.(10).
-           This gives theta_max = |delta|.
-
-        Notes:
-        - delta is internal signed angle with dy/dx = tan(delta).
-        - theta = |delta| is the acute impact angle returned to the user.
-        """
         self.set_target(xf, yf)
 
-        # 1) theta_min from minimal omega solution
+        # 1) zakładam że minimalne theta to omega pochodzące z minimalizacji
         sol_min_omega = self.solve_by_optimization(fi_min_deg=fi_min_deg, fi_max_deg=fi_max_deg)
         delta_min = self._delta_from_fi_omega(sol_min_omega.fi_rad, sol_min_omega.omega, x=self.xf)
         theta_min = abs(delta_min)
 
-        # 2) omega_max
+        # 2) maksymalna omega to ta odpowiadająca maksymalnej częstotliwości
         omega_max = 2.0 * math.pi * float(f_max_hz)
 
-        # 3) solve fi for fixed omega_max using Eq.(3)
+        # 3) zanlezienie kąta wystrzału fi dla maksymalnej omegi 
         fi_for_omega_max = self._solve_fi_for_fixed_omega(
             omega=omega_max,
             fi_min_deg=fi_min_deg,
@@ -254,7 +228,7 @@ class TrajectoryPlanning:
             scan_n=scan_n,
         )
 
-        # 4) theta_max from omega_max solution
+        # 4) znalezienie theta_max z omega_max i fi_for_omega_max
         delta_max = self._delta_from_fi_omega(fi_for_omega_max, omega_max, x=self.xf)
         theta_max = abs(delta_max)
 
@@ -274,7 +248,7 @@ class TrajectoryPlanning:
             "f_max_hz": float(f_max_hz),
         }
 
-    # ---------- Physics ----------
+    # fizyka trajektorii i ligika pomocnicza
 
     def y_at_x(self, x: float, fi: float, omega: float) -> float:
         s = math.sin(fi)
@@ -346,7 +320,7 @@ class TrajectoryPlanning:
             return float("nan")
         return math.sqrt(omega2)
 
-    # Eq.(10) internal delta (signed): dy/dx = tan(delta)
+
     def _delta_from_fi_omega(self, fi: float, omega: float, *, x: float) -> float:
         s = math.sin(fi)
         c = math.cos(fi)
@@ -358,14 +332,13 @@ class TrajectoryPlanning:
         X = x + self.d + self.R * c
 
         term = self.g * X / ((omega * omega) * (self.R * self.R) * (s * s))
-        m = cot - term  # slope dy/dx
+        m = cot - term  # dy/dx
 
         if not math.isfinite(m):
             return float("nan")
 
-        return math.atan(m)  # signed CCW angle
+        return math.atan(m)
 
-    # ---------- Numerics ----------
 
     def _solve_fi_for_fixed_omega(
         self,
@@ -403,13 +376,13 @@ class TrajectoryPlanning:
 
         if bracket is None:
             raise RuntimeError(
-                "Nie znalazłem przedziału dla fi (brak zmiany znaku y(xf)-yf) przy zadanym omega. "
-                "To zwykle oznacza, że punkt (xf,yf) nie jest osiągalny dla tego omega i zakresu fi."
+                "Nie znaleziono przedziału dla fi (brak zmiany znaku y(xf)-yf) przy zadanym omega. "
+                "Punkt (xf,yf) nie jest osiągalny dla tego omega i zakresu fi."
             )
 
         sol = root_scalar(residual, bracket=bracket, method="brentq", xtol=1e-12, rtol=1e-12, maxiter=200)
         if not sol.converged:
-            raise RuntimeError("Rozwiązywanie fi dla stałego omega nie skonwergowało.")
+            raise RuntimeError("Rozwiązywanie fi dla stałego omega nie zbiegło.")
 
         return float(sol.root)
 
@@ -453,11 +426,10 @@ class TrajectoryPlanning:
         return math.radians(float(theta_deg)) if theta_deg is not None else float(theta_rad)
 
 
-# Backward-compatible alias (jeśli gdzieś masz jeszcze stary import/nazwę)
-TrajecoryPlanning = TrajectoryPlanning
+#TrajecoryPlanning = TrajectoryPlanning
 
 
-# Example usage
+# Przykład użycia
 if __name__ == "__main__":
     planner = TrajectoryPlanning(h=0.4, d=0.3, R=0.3, g=9.8)
     planner.set_target(xf=1.6, yf=0.8)
