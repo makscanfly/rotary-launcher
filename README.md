@@ -2,7 +2,7 @@
 **An integrated embedded system for precise projectile launching with BLE control.**
 
 ## Video
-
+https://github.com/user-attachments/assets/09d33232-5dcf-4db1-974e-a2684b0c96fd
 
 ---
 
