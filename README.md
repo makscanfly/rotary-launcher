@@ -15,17 +15,17 @@ The project bridges the gap between high-level trajectory planning in **Python**
 1. **Host App:** A user enters target coordinates (x, y) on a laptop.
 2. **Trajectory Planning:** The Python-based host calculates the necessary angular velocity and the exact release angle using ballistic models.
 3. **BLE Communication:** Parameters are transmitted wirelessly to the launcher.
-4. **Real-time Execution:** The launcher accelerates to the target RPM, uses an optical sensor for feedback, and triggers the electromagnet at the precise microsecond to hit the target.
+4. **Execution:** The launcher accelerates to the target RPM, uses an optical sensor for speed measurements, and triggers the electromagnet at the precise microsecond to hit the target.
 
 ---
 
 ## Hardware Stack
 - **Microcontroller:** `ESP32-S3-WROOM-1-N8R8`
 - **Actuators:** 
-  - High-speed DC Motor (PWM controlled)
-  - Electromagnet (MOSFET switched)
+  - DC Motor
+  - Electromagnet
 - **Sensors:** 
-  - Optical slot sensor for RPM feedback (Hardware Interrupts)
+  - Optical slot sensor for RPM measurements
 - **Host Device:** Laptop/PC with Bluetooth support
 
 ---
